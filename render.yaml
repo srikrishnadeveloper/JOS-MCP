@@ -19,4 +19,9 @@ services:
         sync: false
       - key: GITHUB_BRANCH
         value: main
+      # Notion mirror (optional). Leave unset to disable. See docs/NOTION.md.
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DATABASE_ID
+        sync: false
     healthCheckPath: /health

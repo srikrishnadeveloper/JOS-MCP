@@ -18,7 +18,7 @@ HOW IT RUNS:
   Local:  python server.py  →  stdio  →  Cursor spawns this as a subprocess
   Cloud:  Docker on Render  →  HTTP   →  ChatGPT calls https://you.onrender.com/mcp
 
-TOOLS: 8 read · 9 write · 2 resources — see README.md
+TOOLS: 8 read · 9 write · 3 notion-sync · 2 resources — see README.md
   ChatGPT connectors use the `search` + `fetch` pair (OpenAI MCP schema);
   `search` returns {results:[{id,title,url}]} and `fetch` returns the full
   markdown of a page by id so ChatGPT can display and cite it.
@@ -924,6 +924,32 @@ except ImportError:  # pragma: no cover
     get_writer = None  # type: ignore
     GitHubWriteError = RuntimeError  # type: ignore
 
+# Optional Notion mirror — server runs fine without it (no NOTION_TOKEN = no-op).
+try:
+    from notion_sync import (  # type: ignore
+        push_file_if_configured,
+        delete_file_if_configured,
+        NotionSync,
+        NotionSyncError,
+    )
+except ImportError:  # pragma: no cover
+    push_file_if_configured = None  # type: ignore
+    delete_file_if_configured = None  # type: ignore
+    NotionSync = None  # type: ignore
+    NotionSyncError = RuntimeError  # type: ignore
+
+
+async def _maybe_notion_push(rel_path: str) -> str:
+    """Best-effort Notion mirror after a GitHub write. Never blocks the write."""
+    if push_file_if_configured is None:
+        return ""
+    try:
+        msg = await push_file_if_configured(rel_path)
+        return f"\nNotion: {msg}" if msg else ""
+    except Exception as e:  # pragma: no cover - network/runtime guard
+        log.warning("[notion] push failed for %s: %s", rel_path, e)
+        return f"\nNotion: sync skipped ({e})"
+
 
 def _rel_path_for(page: WikiPage) -> str:
     """Convert an absolute page path into a repo-relative POSIX path (wiki/folder/name.md)."""
@@ -1322,7 +1348,9 @@ async def create_page(
     _index_page_in_engine(engine, page)
 
     commit_url = result.get("commit", {}).get("html_url", "")
-    return f"Created wiki/{folder}/{name}.md\n{commit_url}"
+    rel_path = f"wiki/{folder}/{name}.md"
+    notion_note = await _maybe_notion_push(rel_path)
+    return f"Created {rel_path}\n{commit_url}{notion_note}"
 
 
 @mcp_server.tool()
@@ -1373,7 +1401,8 @@ async def update_page(name: str, content: str, reason: str = "") -> str:
     _write_local_copy(page.folder, page.stem, content)
 
     commit_url = result.get("commit", {}).get("html_url", "")
-    return f"Updated {rel_path}\n{commit_url}"
+    notion_note = await _maybe_notion_push(rel_path)
+    return f"Updated {rel_path}\n{commit_url}{notion_note}"
 
 
 @mcp_server.tool()
@@ -1422,7 +1451,8 @@ async def append_to_page(name: str, content: str, heading: str = "") -> str:
 
     commit_url = result.get("commit", {}).get("html_url", "")
     target = f"under '{heading}'" if heading else "at end"
-    return f"Appended to {rel_path} ({target})\n{commit_url}"
+    notion_note = await _maybe_notion_push(rel_path)
+    return f"Appended to {rel_path} ({target})\n{commit_url}{notion_note}"
 
 
 @mcp_server.tool()
@@ -1456,7 +1486,17 @@ async def delete_page(name: str, reason: str) -> str:
     _deindex_page_in_engine(engine, page)
     _delete_local_copy(page.folder, page.stem)
 
-    return f"Deleted {rel_path} — {reason}"
+    notion_note = ""
+    if delete_file_if_configured is not None:
+        try:
+            msg = await delete_file_if_configured(rel_path)
+            if msg:
+                notion_note = f"\nNotion: {msg}"
+        except Exception as e:  # pragma: no cover - network/runtime guard
+            log.warning("[notion] delete archive failed for %s: %s", rel_path, e)
+            notion_note = f"\nNotion: archive skipped ({e})"
+
+    return f"Deleted {rel_path} — {reason}{notion_note}"
 
 
 # ---------------------------------------------------------------------------
@@ -1624,14 +1664,74 @@ def list_folders() -> str:
     return "\n".join(lines)
 
 
+# --- Notion sync tools (optional; require NOTION_TOKEN + NOTION_DATABASE_ID) ---
+
+@mcp_server.tool()
+async def notion_sync_push(all_pages: bool = True) -> str:
+    """Mirror wiki markdown into Notion (needs NOTION_TOKEN + NOTION_DATABASE_ID).
+
+    create_page / update_page / append_to_page already auto-push the one file
+    they touch. Use this to (re)push every page, e.g. for a first full sync.
+
+    Args:
+        all_pages: push every wiki file (default True).
+    """
+    if NotionSync is None:
+        return "Error: notion_sync module not available."
+    try:
+        sync = NotionSync()
+        if all_pages:
+            lines = await sync.push_all()
+            return "\n".join(lines) if lines else "No wiki files to push."
+        return "Error: set all_pages=true, or just create_page (it auto-syncs one file)."
+    except NotionSyncError as e:
+        return f"Error: {e}"
+
+
+@mcp_server.tool()
+async def notion_sync_pull() -> str:
+    """Pull edits made in Notion back into the GitHub wiki (needs NOTION_TOKEN + GITHUB_TOKEN)."""
+    if NotionSync is None:
+        return "Error: notion_sync module not available."
+    try:
+        sync = NotionSync()
+        lines = await sync.pull_all()
+        return "\n".join(lines) if lines else "Nothing to pull."
+    except NotionSyncError as e:
+        return f"Error: {e}"
+
+
+@mcp_server.tool()
+async def notion_sync_status() -> str:
+    """Show Notion sync configuration and how many pages are mapped."""
+    if NotionSync is None:
+        return "Error: notion_sync module not available."
+    sync = NotionSync()
+    return json.dumps(sync.status(), indent=2)
+
+
 # ---------------------------------------------------------------------------
 # Entry point — stdio (local) or streamable-http / sse (cloud)
 # LEARN: Running "python server.py" directly starts this block.
 #        Cursor instead runs the same file but connects via stdin/stdout (stdio).
 # ---------------------------------------------------------------------------
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from a repo-root .env (local dev). No-op on Render."""
+    env_path = _REPO_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip())
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(name)s  %(message)s")
+    _load_dotenv()
 
     # Optional: pull latest wiki from git before indexing (local dev only)
     if os.environ.get("WIKI_AUTO_PULL", "").strip() in ("1", "true", "yes"):

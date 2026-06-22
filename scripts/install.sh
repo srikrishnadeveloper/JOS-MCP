@@ -17,5 +17,7 @@ fi
 
 export WIKI_BRAIN_DIR="$ROOT/wiki"
 python3 "$ROOT/mcp-server/test_server.py"
+python3 "$ROOT/mcp-server/test_notion_sync.py"
+python3 "$ROOT/mcp-server/test_notion_e2e.py"
 
 echo "Done. Start: ./scripts/start.sh"

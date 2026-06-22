@@ -11,6 +11,7 @@ This file mirrors `CLAUDE.md` for tools that discover `AGENTS.md` automatically 
 | Path | Purpose |
 |------|---------|
 | `mcp-server/server.py` | MCP server entry point |
+| `mcp-server/notion_sync.py` | Notion ↔ wiki mirror (optional) |
 | `wiki/` | Markdown knowledge base |
 | `CLAUDE.md` | Wiki maintenance schema |
 | `docs/` | Setup guides |
@@ -19,7 +20,9 @@ This file mirrors `CLAUDE.md` for tools that discover `AGENTS.md` automatically 
 
 - Keep `wiki/` free of secrets and government IDs in the public fork.
 - Run `python mcp-server/test_server.py` after wiki or engine changes.
+- Run `python mcp-server/test_notion_sync.py` after touching `notion_sync.py`.
 - Write tools need `GITHUB_TOKEN` + `GITHUB_REPO` — see `docs/GITHUB.md`.
+- Notion mirror needs `NOTION_TOKEN` + `NOTION_DATABASE_ID` — see `docs/NOTION.md`.
 
 ## Demo vs production
 

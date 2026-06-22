@@ -23,6 +23,17 @@ Use this file to track fixes before a public release. Severity: **CRITICAL** →
 
 ---
 
+## NOTION-001 — Notion mirror was never wired into `main` [FIXED 2026-06-11]
+
+| Field | Detail |
+|-------|--------|
+| **Files** | `mcp-server/notion_sync.py` (new), `mcp-server/server.py`, `docs/NOTION.md`, `render.yaml`, `.env.example` |
+| **Problem** | A Notion ↔ wiki sync existed only on the unmerged `cursor/notion-sync-6111` branch, so the deployed server had **no** Notion tools — "not even working" from the user's view. |
+| **Fix** | Integrated `notion_sync.py` onto `main`: added `notion_sync_push/pull/status` tools and an auto-push hook in `create_page`/`update_page`/`append_to_page` (and archive on `delete_page`). So a page created via ChatGPT is mirrored into a Notion database in the same request. Made the Notion API base (`NOTION_API_BASE`) and state dir (`WIKI_BRAIN_STATE_DIR`) overridable. Verified Notion API endpoints/shapes against current docs (`PATCH/GET /v1/pages/:id/markdown`, `replace_content`/`new_str`, `page_markdown.markdown`). Tested end-to-end against a mock Notion API (`test_notion_e2e.py`, 21 checks) plus 27 offline unit tests. |
+| **Note** | GitHub remains the source of truth; Notion is a mirror/editor. Requires `NOTION_TOKEN` + `NOTION_DATABASE_ID` (see `docs/NOTION.md`); no-op when unset. |
+
+---
+
 ## CHATGPT-001 — ChatGPT connector could not display page markdown [FIXED 2026-06-11]
 
 | Field | Detail |
