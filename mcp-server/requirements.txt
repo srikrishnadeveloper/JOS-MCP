@@ -1,4 +1,4 @@
 # Python packages for Wiki Brain MCP server
 # Install: pip install -r requirements.txt
-mcp>=1.11.0      # Model Context Protocol — FastMCP server framework
+mcp>=1.11.0,<2      # Model Context Protocol — FastMCP server framework
 httpx>=0.27        # async HTTP client — used by writer.py for GitHub API
