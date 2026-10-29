@@ -223,6 +223,27 @@ async def test_notion_client_retries_429():
             test("two attempts", calls["n"] == 2)
 
 
+def test_resolve_api_base():
+    r = ns._resolve_api_base
+    default = ns._DEFAULT_NOTION_API_BASE
+    test("api base: unset -> official", r(None) == default and r("") == default)
+    test("api base: official allowed", r("https://api.notion.com/v1/") == "https://api.notion.com/v1")
+    test("api base: 127.0.0.1 mock allowed", r("http://127.0.0.1:8731") == "http://127.0.0.1:8731")
+    test("api base: localhost mock allowed", r("http://localhost:9000/v1") == "http://localhost:9000/v1")
+    test("api base: [::1] mock allowed", r("http://[::1]:9000") == "http://[::1]:9000")
+    for bad in (
+        "https://evil.example.com/v1",
+        "http://api.notion.com/v1",
+        "https://api.notion.com.evil.com/v1",
+        "http://127.0.0.1@evil.com/",
+        "http://user:pw@localhost:1/",
+        "http://localhost.evil.com/",
+        "ftp://localhost/",
+        "http://[bad",
+    ):
+        test(f"api base: rejects {bad}", r(bad) == default)
+
+
 def main() -> bool:
     print("=" * 60)
     print(" Notion Sync — Unit Tests")
@@ -241,6 +262,7 @@ def main() -> bool:
         asyncio.run(test_pull_uses_put_file_for_new(tmp))
 
     asyncio.run(test_notion_client_retries_429())
+    test_resolve_api_base()
 
     print(f"\n{'=' * 60}")
     print(f" Results: {PASS}/{TOTAL} passed, {FAIL} failed")
