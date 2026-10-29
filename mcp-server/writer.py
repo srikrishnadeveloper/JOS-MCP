@@ -125,6 +125,8 @@ class GitHubWriter:
         """Create a new wiki page under wiki/<folder>/<name>.md with optional frontmatter."""
         folder = folder.strip("/ ")
         name = name.strip(" /.md")
+        if not name or "/" in name or "\\" in name or ".." in folder.split("/") + [name]:
+            raise GitHubWriteError(f"Invalid page path: {folder}/{name}")
         path = f"wiki/{folder}/{name}.md"
 
         # Abort if exists
