@@ -51,13 +51,13 @@ There is no separate linter configured; `test_server.py` is the CI-style check (
 | Mode | Command | Notes |
 |------|---------|-------|
 | **stdio** (Cursor/Claude) | `./scripts/start.sh` | Default; client spawns the process |
-| **HTTP** (cloud/ChatGPT) | `MCP_TRANSPORT=streamable-http PORT=8000 python mcp-server/server.py` | MCP at `http://localhost:8000/mcp` |
+| **HTTP** (cloud/ChatGPT) | `MCP_API_KEY=… MCP_TRANSPORT=streamable-http PORT=8000 python mcp-server/server.py` | MCP at `http://localhost:8000/mcp`; exits if `MCP_API_KEY` is unset |
 
 Set `WIKI_BRAIN_DIR` to point at a custom vault (defaults to `./wiki`).
 
 ### HTTP dev gotchas
 
-- `/health` returns JSON only when `MCP_API_KEY` is set (auth middleware handles it). Without a key, use the MCP `/mcp` endpoint or run `test_server.py` instead.
+- HTTP transports refuse to start without `MCP_API_KEY`. For keyless local dev set `MCP_ALLOW_UNAUTHENTICATED=1`, which binds to `127.0.0.1` only (no auth middleware, so `/health` is not served).
 - `pip install` puts CLI tools (`uvicorn`, `mcp`) in `~/.local/bin`; add to `PATH` if needed: `export PATH="$HOME/.local/bin:$PATH"`.
 - Write tools (`create_page`, etc.) need `GITHUB_TOKEN` + `GITHUB_REPO` in `.env` — see `docs/GITHUB.md`. Read tools work offline with no credentials.
 - Cloud smoke scripts: `MCP_TEST_URL` + `MCP_API_KEY` for `mcp-server/_test_cloud.py` and `_test_write.py`.

@@ -391,7 +391,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
     Token via Authorization: Bearer … or ?token= (ChatGPT connectors lack custom headers).
     Compares SHA-256 digests so timing does not leak key length.
-    If MCP_API_KEY is unset, all requests pass through (local dev).
+    Only installed when MCP_API_KEY is set; HTTP startup refuses to run without
+    it unless MCP_ALLOW_UNAUTHENTICATED=1 (which binds to 127.0.0.1).
     """
 
     def __init__(self, app, api_key: str | None):
@@ -1746,7 +1747,18 @@ if __name__ == "__main__":
         transport = "streamable-http"
 
     if transport in ("sse", "streamable-http"):
-        api_key = os.environ.get("MCP_API_KEY")
+        api_key = (os.environ.get("MCP_API_KEY") or "").strip()
+        if not api_key:
+            if os.environ.get("MCP_ALLOW_UNAUTHENTICATED", "").strip().lower() in ("1", "true", "yes"):
+                mcp_server.settings.host = "127.0.0.1"
+                log.warning("[AUTH] MCP_API_KEY not set — MCP_ALLOW_UNAUTHENTICATED=1, binding to 127.0.0.1 only")
+            else:
+                log.error(
+                    "[AUTH] MCP_API_KEY is required for %s transport. Set it (e.g. on Render), "
+                    "or set MCP_ALLOW_UNAUTHENTICATED=1 for a localhost-only dev server.",
+                    transport,
+                )
+                sys.exit(1)
         if api_key:
             log.info("[AUTH] API key auth ENABLED — token required on all /mcp requests")
             # Monkey-patch FastMCP app factories to inject auth middleware into uvicorn.
@@ -1763,7 +1775,5 @@ if __name__ == "__main__":
 
             mcp_server.streamable_http_app = _secured_http  # type: ignore[method-assign]
             mcp_server.sse_app = _secured_sse              # type: ignore[method-assign]
-        else:
-            log.warning("[AUTH] MCP_API_KEY not set — server is PUBLIC. Set it on Render!")
 
     mcp_server.run(transport=transport)

@@ -64,7 +64,7 @@ Use this file to track fixes before a public release. Severity: **CRITICAL** →
 | **Impact** | Compromised or malicious MCP session + `GITHUB_TOKEN` can modify arbitrary files in the connected repo, not just `wiki/`. |
 | **Fix** | Validate folder/name: allow only `[a-zA-Z0-9_-]+` per segment; reject `..`; optionally enforce an allowlist of top-level folders. |
 
-### SEC-003 — HTTP deploy is public when `MCP_API_KEY` is unset
+### SEC-003 — HTTP deploy is public when `MCP_API_KEY` is unset [FIXED — HTTP startup now exits without key; `MCP_ALLOW_UNAUTHENTICATED=1` binds 127.0.0.1]
 
 | Field | Detail |
 |-------|--------|
