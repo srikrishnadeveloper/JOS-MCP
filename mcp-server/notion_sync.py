@@ -30,6 +30,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -46,9 +47,40 @@ _NOTION_VERSION_BLOCKS = "2022-06-28"
 _NOTION_VERSION_MD = "2025-09-03"
 _RATE_DELAY = 0.35  # ~3 req/s Notion limit
 
-# Base URL is overridable so the sync logic can be exercised against a local
-# mock Notion server in tests. Defaults to the real Notion API.
-_NOTION_API_BASE = os.environ.get("NOTION_API_BASE", "https://api.notion.com/v1").rstrip("/")
+_DEFAULT_NOTION_API_BASE = "https://api.notion.com/v1"
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _resolve_api_base(raw: str | None) -> str:
+    """Return a safe Notion API base URL.
+
+    NOTION_API_BASE is a TEST-ONLY override (local mock Notion server). Because
+    every request carries the NOTION_TOKEN bearer, only the official API or a
+    loopback host is accepted; anything else falls back to the official API.
+    """
+    if not raw:
+        return _DEFAULT_NOTION_API_BASE
+    base = raw.strip().rstrip("/")
+    try:
+        parsed = urlsplit(base)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        parsed, host = None, ""
+    if parsed is not None and not parsed.username and not parsed.password:
+        if parsed.scheme == "https" and host == "api.notion.com":
+            return base
+        if parsed.scheme in ("http", "https") and host in _LOOPBACK_HOSTS:
+            return base
+    log.warning(
+        "Ignoring NOTION_API_BASE=%r: only https://api.notion.com or a "
+        "localhost/127.0.0.1 test mock is allowed; using %s",
+        raw,
+        _DEFAULT_NOTION_API_BASE,
+    )
+    return _DEFAULT_NOTION_API_BASE
+
+
+_NOTION_API_BASE = _resolve_api_base(os.environ.get("NOTION_API_BASE"))
 
 
 class NotionSyncError(RuntimeError):

@@ -87,3 +87,8 @@ python mcp-server/notion_sync.py status # live config check
 > `NOTION_API_BASE`) and exercises the real sync code end-to-end — including the
 > "ChatGPT `create_page` → row appears in Notion" path — without needing a real
 > token.
+>
+> `NOTION_API_BASE` is **test-only — never set it in production.** Every request
+> carries `NOTION_TOKEN`, so the override is only honoured for
+> `https://api.notion.com` or a loopback host (`localhost`, `127.0.0.1`, `::1`);
+> any other value is ignored with a warning and the official API is used.
