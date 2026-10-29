@@ -989,6 +989,32 @@ def _validate_folder_path(folder: str) -> str | None:
     return None
 
 
+def _normalize_page_name(name: str) -> str:
+    """Strip whitespace, edge slashes and a trailing .md extension."""
+    return name.strip().strip("/").removesuffix(".md")
+
+
+def _validate_page_name(name: str) -> str | None:
+    """Return an error message when a page stem is invalid, else None."""
+    if not name:
+        return "page name is required"
+    if not _FOLDER_SEGMENT_RE.match(name):
+        return (
+            f"invalid page name '{name}' — use lowercase letters, numbers, hyphens, "
+            "underscores; must start with a letter or digit (no '/', '\\' or '..')"
+        )
+    return None
+
+
+def _local_page_path(folder: str, name: str) -> Path:
+    """Resolve wiki/<folder>/<name>.md and refuse paths that escape WIKI_DIR."""
+    root = WIKI_DIR.resolve()
+    path = (root / _normalize_folder(folder) / f"{name}.md").resolve()
+    if not path.is_relative_to(root):
+        raise ValueError(f"path escapes wiki directory: {folder}/{name}.md")
+    return path
+
+
 def _pages_in_folder(engine: WikiEngine, folder: str) -> list[WikiPage]:
     """All indexed pages whose folder matches exactly (not nested children)."""
     folder = _normalize_folder(folder)
@@ -1121,9 +1147,11 @@ async def create_folder(
         return f"Error: {msg}"
 
     if create_index_page:
-        index_name = index_name.strip().strip("/").removesuffix(".md")
+        index_name = _normalize_page_name(index_name)
         if not index_name:
             return "Error: index_name is required when create_index_page=True."
+        if msg := _validate_page_name(index_name):
+            return f"Error: {msg}"
 
     try:
         result = await writer.create_wiki_folder(
@@ -1294,10 +1322,12 @@ async def create_page(
     if err:
         return err
 
-    name = name.strip().strip("/").removesuffix(".md")
+    name = _normalize_page_name(name)
     folder = _normalize_folder(folder)
     if not name:
         return "Error: name is required."
+    if msg := _validate_page_name(name):
+        return f"Error: {msg}"
     if msg := _validate_folder_path(folder):
         return f"Error: {msg}"
 
@@ -1506,7 +1536,7 @@ async def delete_page(name: str, reason: str) -> str:
 def _write_local_copy(folder: str, name: str, content: str) -> None:
     """Mirror a GitHub write to the local wiki/ tree (best-effort, non-fatal)."""
     try:
-        local_path = WIKI_DIR / folder / f"{name}.md"
+        local_path = _local_page_path(folder, name)
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_text(content, encoding="utf-8")
     except Exception as exc:
@@ -1516,7 +1546,7 @@ def _write_local_copy(folder: str, name: str, content: str) -> None:
 def _delete_local_copy(folder: str, name: str) -> None:
     """Remove a local wiki page file."""
     try:
-        local_path = WIKI_DIR / folder / f"{name}.md"
+        local_path = _local_page_path(folder, name)
         if local_path.exists():
             local_path.unlink()
     except Exception as exc:
@@ -1582,7 +1612,9 @@ async def rename_page(
 
     old_rel = _rel_path_for(page)
     dst_folder = _normalize_folder(new_folder or page.folder)
-    dst_name = (new_name.strip().strip("/").removesuffix(".md") or page.stem)
+    dst_name = _normalize_page_name(new_name) or page.stem
+    if msg := _validate_page_name(dst_name):
+        return f"Error: {msg}"
     if msg := _validate_folder_path(dst_folder):
         return f"Error: {msg}"
     new_rel = f"wiki/{dst_folder}/{dst_name}.md"
