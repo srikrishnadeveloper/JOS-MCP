@@ -155,7 +155,26 @@ def main():
     miss = srv2.fetch("definitely-not-a-real-page-xyz")
     test("fetch(missing) still returns text", bool(miss.get("text")))
 
-    print("\n10. Performance")
+    print("\n10. Redaction bypass guard")
+    import os
+    import sanitize
+    saved = {k: os.environ.get(k) for k in ("WIKI_DISABLE_REDACTION", "MCP_TRANSPORT")}
+    secret = "password: hunter2"
+    try:
+        os.environ["WIKI_DISABLE_REDACTION"] = "1"
+        for t in ("streamable-http", "sse", "SSE", "http"):
+            os.environ["MCP_TRANSPORT"] = t
+            test(f"bypass ignored on {t}", sanitize.redact(secret) != secret)
+        os.environ["MCP_TRANSPORT"] = "stdio"
+        test("bypass honoured on stdio", sanitize.redact(secret) == secret)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    print("\n11. Performance")
     t0 = time.time()
     for _ in range(50):
         engine.search("python mongodb task")
