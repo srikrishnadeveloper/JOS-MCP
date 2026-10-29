@@ -14,15 +14,20 @@ TWO LAYERS (search "# LEARN:" below):
 
 IMPORTANT: Files on disk are never changed. Redaction is output-only.
 
-Local dev bypass: WIKI_DISABLE_REDACTION=1  (never on public Render)
+Local dev bypass: WIKI_DISABLE_REDACTION=1 — honoured only for the stdio
+transport. On HTTP transports (sse / streamable-http) the flag is ignored and
+an error is logged, so a public deploy can never switch the filter off.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any
 
 REDACTED = "***REDACTED***"
+
+log = logging.getLogger("wiki-brain.sanitize")
 
 # Label patterns for secrets — longer/specific terms before short fallbacks (secret, token).
 _SECRET_KEYS = (
@@ -77,8 +82,25 @@ PRIVATE_TAGS: set[str] = {
 }
 
 
+_bypass_refused_logged = False
+
+
 def _disabled() -> bool:
-    return os.environ.get("WIKI_DISABLE_REDACTION", "").strip() in ("1", "true", "yes")
+    global _bypass_refused_logged
+    if os.environ.get("WIKI_DISABLE_REDACTION", "").strip().lower() not in ("1", "true", "yes"):
+        return False
+    transport = os.environ.get("MCP_TRANSPORT", "stdio").strip().lower() or "stdio"
+    if transport == "stdio":
+        return True
+    if not _bypass_refused_logged:
+        log.error(
+            "[PRIVACY] WIKI_DISABLE_REDACTION is set but MCP_TRANSPORT=%s is not stdio "
+            "— IGNORING it; redaction and private-page hiding stay ON. "
+            "Remove WIKI_DISABLE_REDACTION from this deployment's environment.",
+            transport,
+        )
+        _bypass_refused_logged = True
+    return False
 
 
 def redact(text: str) -> str:

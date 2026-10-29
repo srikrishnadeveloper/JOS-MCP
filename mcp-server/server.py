@@ -1744,6 +1744,9 @@ if __name__ == "__main__":
         transport = "sse"
     if "--http" in sys.argv:
         transport = "streamable-http"
+    # sanitize.py reads MCP_TRANSPORT to decide whether WIKI_DISABLE_REDACTION is allowed.
+    os.environ["MCP_TRANSPORT"] = transport
+    sanitize._disabled()
 
     if transport in ("sse", "streamable-http"):
         api_key = os.environ.get("MCP_API_KEY")
