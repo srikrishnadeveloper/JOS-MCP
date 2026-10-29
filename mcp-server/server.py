@@ -385,18 +385,67 @@ log = logging.getLogger("wiki-brain")
 # Unauthenticated paths when MCP_API_KEY is set (/health handled separately below).
 _OPEN_PATHS = {"/"}
 
+_TRUTHY = ("1", "true", "yes")
+_TOKEN_QS_RE = re.compile(r"(?i)((?:^|[?&\s])token=)[^&\s\"']*")
+
+
+def _redact_query_token(text: str) -> str:
+    """Mask any ``token=...`` value in a URL / query string / log line."""
+    return _TOKEN_QS_RE.sub(r"\1[REDACTED]", text)
+
+
+class _RedactQueryTokenFilter(logging.Filter):
+    """Strip ``token=`` values from log records (e.g. uvicorn access logs)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str) and "token=" in record.msg.lower():
+            record.msg = _redact_query_token(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                _redact_query_token(a) if isinstance(a, str) and "token=" in a.lower() else a
+                for a in record.args
+            )
+        return True
+
+
+def _install_log_redaction() -> None:
+    f = _RedactQueryTokenFilter()
+    for name in ("", "uvicorn", "uvicorn.access", "uvicorn.error", "httpx", "wiki-brain"):
+        lg = logging.getLogger(name)
+        if not any(isinstance(x, _RedactQueryTokenFilter) for x in lg.filters):
+            lg.addFilter(f)
+        for h in lg.handlers:
+            if not any(isinstance(x, _RedactQueryTokenFilter) for x in h.filters):
+                h.addFilter(f)
+
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """HTTP auth for cloud deploys only — stdio transport never reaches this.
 
-    Token via Authorization: Bearer … or ?token= (ChatGPT connectors lack custom headers).
+    Token via ``Authorization: Bearer …``. The legacy ``?token=`` query param is
+    rejected unless explicitly opted into (``allow_query_token`` /
+    MCP_ALLOW_QUERY_TOKEN=1) because URLs leak into logs, history and referers.
+    When allowed, the token is stripped from the query string before the
+    request reaches the app or the access log.
     Compares SHA-256 digests so timing does not leak key length.
     If MCP_API_KEY is unset, all requests pass through (local dev).
     """
 
-    def __init__(self, app, api_key: str | None):
+    def __init__(self, app, api_key: str | None, allow_query_token: bool = False):
         super().__init__(app)
         self._key = api_key.encode() if api_key else None
+        self._allow_query_token = allow_query_token
+
+    @staticmethod
+    def _strip_query_token(request: Request) -> None:
+        qs: bytes = request.scope.get("query_string", b"") or b""
+        if b"token" not in qs.lower():
+            return
+        kept = [
+            part for part in qs.split(b"&")
+            if part and part.split(b"=", 1)[0].lower() != b"token"
+        ]
+        request.scope["query_string"] = b"&".join(kept)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -409,35 +458,49 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                 "transport": "streamable-http",
             })
 
+        q_token = request.query_params.get("token", "")
+        if q_token:
+            self._strip_query_token(request)
+
         if self._key is None:
-            return await call_next(request)
-
-        if path in _OPEN_PATHS:
-            return await call_next(request)
-
-        # Try Authorization header first, then ?token= query param (for ChatGPT
-        # connectors which only support OAuth/None — no custom header support).
-        token_bytes: bytes | None = None
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer "):
-            token_bytes = auth[len("Bearer "):].encode()
+            response = await call_next(request)
+        elif path in _OPEN_PATHS:
+            response = await call_next(request)
         else:
-            q_token = request.query_params.get("token", "")
-            if q_token:
+            token_bytes: bytes | None = None
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                token_bytes = auth[len("Bearer "):].encode()
+            elif q_token:
+                if not self._allow_query_token:
+                    log.warning(
+                        "[AUTH] Rejected query-string token auth from %s — use Authorization: Bearer "
+                        "(rotate MCP_API_KEY if this URL was shared or logged)",
+                        request.client.host if request.client else "?",
+                    )
+                    return JSONResponse(
+                        {"error": "Unauthorized: send the API key in an Authorization: Bearer header"},
+                        status_code=401,
+                        headers={"Referrer-Policy": "no-referrer"},
+                    )
                 token_bytes = q_token.encode()
 
-        if token_bytes is None:
-            log.warning("[AUTH] No token from %s %s", request.client.host if request.client else "?", path)
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            if token_bytes is None:
+                log.warning("[AUTH] No token from %s %s", request.client.host if request.client else "?", path)
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-        if not hmac.compare_digest(
-            hashlib.sha256(token_bytes).digest(),
-            hashlib.sha256(self._key).digest(),
-        ):
-            log.warning("[AUTH] Invalid token from %s", request.client.host if request.client else "?")
-            return JSONResponse({"error": "Forbidden"}, status_code=403)
+            if not hmac.compare_digest(
+                hashlib.sha256(token_bytes).digest(),
+                hashlib.sha256(self._key).digest(),
+            ):
+                log.warning("[AUTH] Invalid token from %s", request.client.host if request.client else "?")
+                return JSONResponse({"error": "Forbidden"}, status_code=403)
 
-        return await call_next(request)
+            response = await call_next(request)
+
+        if q_token:
+            response.headers["Referrer-Policy"] = "no-referrer"
+        return response
 
 
 # ---------------------------------------------------------------------------
@@ -1746,20 +1809,27 @@ if __name__ == "__main__":
         transport = "streamable-http"
 
     if transport in ("sse", "streamable-http"):
+        _install_log_redaction()
         api_key = os.environ.get("MCP_API_KEY")
+        allow_query_token = os.environ.get("MCP_ALLOW_QUERY_TOKEN", "").strip().lower() in _TRUTHY
         if api_key:
-            log.info("[AUTH] API key auth ENABLED — token required on all /mcp requests")
+            log.info("[AUTH] API key auth ENABLED — Bearer token required on all /mcp requests")
+            if allow_query_token:
+                log.warning(
+                    "[AUTH] MCP_ALLOW_QUERY_TOKEN=1 — query-string token auth accepted. The key travels "
+                    "in URLs; treat connector URLs as secrets and rotate if exposed."
+                )
             # Monkey-patch FastMCP app factories to inject auth middleware into uvicorn.
             _orig_http = mcp_server.streamable_http_app
             _orig_sse = mcp_server.sse_app
 
             def _secured_http(*args, **kwargs):
                 app = _orig_http(*args, **kwargs)
-                return APIKeyMiddleware(app, api_key)
+                return APIKeyMiddleware(app, api_key, allow_query_token)
 
             def _secured_sse(*args, **kwargs):
                 app = _orig_sse(*args, **kwargs)
-                return APIKeyMiddleware(app, api_key)
+                return APIKeyMiddleware(app, api_key, allow_query_token)
 
             mcp_server.streamable_http_app = _secured_http  # type: ignore[method-assign]
             mcp_server.sse_app = _secured_sse              # type: ignore[method-assign]

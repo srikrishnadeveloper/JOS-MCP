@@ -27,6 +27,7 @@ ChatGPT connects to MCP servers over **HTTP** (not stdio). Deploy Wiki Brain to 
 | Variable | Required | Example |
 |----------|----------|---------|
 | `MCP_API_KEY` | Yes | random secret string |
+| `MCP_ALLOW_QUERY_TOKEN` | No | `1` to accept `?token=` auth (off by default; see below) |
 | `MCP_TRANSPORT` | Yes | `streamable-http` (set in Dockerfile) |
 | `GITHUB_TOKEN` | For writes | fine-grained PAT |
 | `GITHUB_REPO` | For writes | `you/wiki-brain` |
@@ -53,11 +54,19 @@ https://YOUR-SERVICE.onrender.com/mcp
 
 3. Authentication: **Bearer token** = your `MCP_API_KEY`
 
-   If the UI only supports query auth:
+   `?token=` query-string auth is **disabled by default**: URLs end up in access
+   logs, proxy logs, browser history and `Referer` headers, so a key in the URL
+   is a leaked key. If your client truly cannot send headers, you can opt in by
+   setting `MCP_ALLOW_QUERY_TOKEN=1` on the server and using:
 
 ```
 https://YOUR-SERVICE.onrender.com/mcp?token=YOUR_MCP_API_KEY
 ```
+
+   Treat that URL as a secret. The server strips the token from the request
+   before logging and sends `Referrer-Policy: no-referrer`, but upstream
+   proxies/CDNs may still log it — rotate `MCP_API_KEY` if the URL is ever
+   shared or logged.
 
 4. Save and enable the connector in a new chat
 

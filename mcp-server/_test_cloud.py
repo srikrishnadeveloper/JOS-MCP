@@ -25,8 +25,9 @@ def main() -> None:
         print("Set MCP_TEST_URL and MCP_API_KEY environment variables.")
         sys.exit(1)
 
-    url = f"{base}/mcp/?token={key}"
+    url = f"{base}/mcp/"
     headers = {
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }

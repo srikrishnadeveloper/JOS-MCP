@@ -9,6 +9,7 @@ WHAT IT TESTS (no GitHub, no network):
   - search returns sensible results
   - folder path validation rules
   - get_status() async tool
+  - HTTP API key middleware (Bearer only; ?token= opt-in, redacted)
 
 Run from repo root:  python mcp-server/test_server.py
 """
@@ -155,7 +156,46 @@ def main():
     miss = srv2.fetch("definitely-not-a-real-page-xyz")
     test("fetch(missing) still returns text", bool(miss.get("text")))
 
-    print("\n10. Performance")
+    print("\n10. HTTP auth middleware (API key)")
+    import logging
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse as _JR
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    seen_qs: list[str] = []
+
+    async def _echo(request):
+        seen_qs.append(request.url.query)
+        return _JR({"ok": True})
+
+    def _client(allow_query: bool) -> TestClient:
+        inner = Starlette(routes=[Route("/mcp", _echo, methods=["GET", "POST"])])
+        return TestClient(srv.APIKeyMiddleware(inner, "s3cret", allow_query_token=allow_query))
+
+    c = _client(False)
+    test("no token -> 401", c.get("/mcp").status_code == 401)
+    test("Bearer ok -> 200", c.get("/mcp", headers={"Authorization": "Bearer s3cret"}).status_code == 200)
+    test("Bearer wrong -> 403", c.get("/mcp", headers={"Authorization": "Bearer nope"}).status_code == 403)
+    r = c.get("/mcp?token=s3cret")
+    test("?token= rejected by default", r.status_code == 401, f"got {r.status_code}")
+    test("?token= rejection sets no-referrer", r.headers.get("referrer-policy") == "no-referrer")
+
+    c2 = _client(True)
+    seen_qs.clear()
+    r = c2.get("/mcp?token=s3cret&x=1")
+    test("?token= accepted when opted in", r.status_code == 200, f"got {r.status_code}")
+    test("?token= stripped before app", seen_qs == ["x=1"], f"got {seen_qs}")
+    test("?token= wrong -> 403 when opted in", c2.get("/mcp?token=bad").status_code == 403)
+
+    rec = logging.LogRecord("uvicorn.access", logging.INFO, "", 0,
+                            '%s - "%s %s HTTP/%s" %d',
+                            ("1.2.3.4:1", "POST", "/mcp?a=1&token=s3cret", "1.1", 200), None)
+    srv._RedactQueryTokenFilter().filter(rec)
+    test("log filter redacts token=", "s3cret" not in rec.getMessage() and "[REDACTED]" in rec.getMessage(),
+         rec.getMessage())
+
+    print("\n11. Performance")
     t0 = time.time()
     for _ in range(50):
         engine.search("python mongodb task")

@@ -110,6 +110,7 @@ Use this file to track fixes before a public release. Severity: **CRITICAL** →
 | **Problem** | Token accepted via URL query for ChatGPT compatibility. Query strings appear in access logs, browser history, Referer headers, and proxy logs. |
 | **Impact** | Credential leakage if logs are retained or shared. |
 | **Fix** | Prefer Bearer header in docs; add log-sanitization middleware; warn in `CHATGPT.md`; consider short-lived session tokens after initial `?token=` handshake. |
+| **Status** | **Fixed** — `?token=` rejected unless `MCP_ALLOW_QUERY_TOKEN=1`; when allowed, the token is stripped from the request scope before the app/access log, `token=` values are redacted from logs, and responses send `Referrer-Policy: no-referrer`. Smoke scripts use the Bearer header. |
 
 ### SEC-005 — Write tools have no folder allowlist or confirmation
 
