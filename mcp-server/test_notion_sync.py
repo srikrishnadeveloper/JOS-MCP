@@ -197,8 +197,79 @@ async def test_pull_uses_put_file_for_new(tmp: Path):
         test("full file has body", "# Hello" in put_content)
 
 
+async def test_pull_rejects_unsafe_paths(tmp: Path):
+    print("\n9. Pull rejects unsafe Notion Path values")
+    base = tmp / "pull_unsafe"
+    (base / "wiki").mkdir(parents=True)
+    state = ns.SyncState(base / "state.json")
+    state.set_database_id("db-1")
+
+    bad_paths = [
+        "wiki/../../evil.md",
+        "wiki/../evil.md",
+        "/etc/evil.md",
+        "../evil.md",
+        "evil.md",
+        "wiki/x.md\n",
+        "wiki/x.txt",
+        "wiki/UPPER.md",
+        "mcp-server/server.md",
+    ]
+    mock_client = MagicMock()
+    mock_client._prop_text = ns.NotionClient._prop_text
+    mock_client._prop_tags = ns.NotionClient._prop_tags
+    mock_client.query_database = AsyncMock(return_value=[
+        {
+            "id": f"n-{i}",
+            "properties": {
+                "Name": {"type": "title", "title": [{"plain_text": "Evil"}]},
+                "Path": {"type": "rich_text", "rich_text": [{"plain_text": p}]},
+                "Tags": {"type": "multi_select", "multi_select": []},
+            },
+        }
+        for i, p in enumerate(bad_paths)
+    ])
+    mock_client.get_markdown = AsyncMock(return_value="pwned\n")
+
+    mock_writer = MagicMock()
+    mock_writer.update_wiki_page = AsyncMock(side_effect=GitHubWriteError("not found"))
+    mock_writer.put_file = AsyncMock(return_value={})
+
+    with patch.object(ns, "_REPO_ROOT", base), patch.object(ns, "_WIKI_DIR", base / "wiki"):
+        with patch("writer.get_writer", return_value=mock_writer):
+            sync = ns.NotionSync(client=mock_client, state=state)
+            results = await sync.pull_all()
+    test("all unsafe paths rejected", len(results) == len(bad_paths)
+         and all(r.startswith("ERROR") for r in results), str(results))
+    test("no GitHub update", mock_writer.update_wiki_page.await_count == 0)
+    test("no GitHub put_file", mock_writer.put_file.await_count == 0)
+    test("no Notion body fetched", mock_client.get_markdown.await_count == 0)
+    test("nothing written outside wiki", not (tmp / "evil.md").exists() and not (base / "evil.md").exists())
+    test("no state recorded", not any(p in state.data.get("pages", {}) for p in bad_paths))
+
+
+async def test_push_rejects_outside_wiki(tmp: Path):
+    print("\n10. Push rejects paths outside wiki/")
+    base = tmp / "push_unsafe"
+    (base / "wiki").mkdir(parents=True)
+    (base / "secret.md").write_text("secret", encoding="utf-8")
+    state = ns.SyncState(base / "state.json")
+    state.set_database_id("db-1")
+    mock_client = MagicMock()
+    mock_client.create_db_page = AsyncMock(return_value="p")
+    with patch.object(ns, "_REPO_ROOT", base), patch.object(ns, "_WIKI_DIR", base / "wiki"):
+        sync = ns.NotionSync(client=mock_client, state=state)
+        try:
+            await sync.push_file("wiki/../secret.md")
+            rejected = False
+        except ns.NotionSyncError:
+            rejected = True
+    test("push of wiki/../secret.md rejected", rejected)
+    test("no Notion page created", mock_client.create_db_page.await_count == 0)
+
+
 async def test_notion_client_retries_429():
-    print("\n9. Notion client retries on 429")
+    print("\n11. Notion client retries on 429")
     client = ns.NotionClient("test-token")
     calls = {"n": 0}
 
@@ -239,6 +310,8 @@ def main() -> bool:
         asyncio.run(test_push_skips_unchanged(tmp))
         asyncio.run(test_push_resolves_path_from_notion(tmp))
         asyncio.run(test_pull_uses_put_file_for_new(tmp))
+        asyncio.run(test_pull_rejects_unsafe_paths(tmp))
+        asyncio.run(test_push_rejects_outside_wiki(tmp))
 
     asyncio.run(test_notion_client_retries_429())
 
