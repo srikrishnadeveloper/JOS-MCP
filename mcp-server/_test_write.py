@@ -32,18 +32,22 @@ def main() -> None:
         print("Set MCP_TEST_URL and MCP_API_KEY environment variables.")
         sys.exit(1)
 
-    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
 
     def call(session, rid, method, params=None):
         h = {**headers, "mcp-session-id": session}
         body = {"jsonrpc": "2.0", "id": rid, "method": method}
         if params:
             body["params"] = params
-        r = requests.post(f"{base}/mcp?token={token}", headers=h, json=body, timeout=60)
+        r = requests.post(f"{base}/mcp", headers=h, json=body, timeout=60)
         return _parse_sse(r.text)
 
     r = requests.post(
-        f"{base}/mcp?token={token}",
+        f"{base}/mcp",
         headers=headers,
         json={
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -60,7 +64,7 @@ def main() -> None:
     assert session, "No session id returned"
 
     requests.post(
-        f"{base}/mcp?token={token}",
+        f"{base}/mcp",
         headers={**headers, "mcp-session-id": session},
         json={"jsonrpc": "2.0", "method": "notifications/initialized"},
         timeout=30,
