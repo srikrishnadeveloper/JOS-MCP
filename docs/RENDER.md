@@ -6,7 +6,7 @@
 2. [Render Dashboard](https://dashboard.render.com/) → **New +** → **Blueprint**
 3. Connect your fork — `render.yaml` defines the service
 4. Set secret env vars when prompted:
-   - `MCP_API_KEY`
+   - `MCP_API_KEY` (required — the server exits on startup without it)
    - `GITHUB_TOKEN` (optional)
    - `GITHUB_REPO` (optional)
 
