@@ -97,6 +97,20 @@ def _wiki_rel_path(path: Path) -> str:
     return rel.as_posix()
 
 
+_SAFE_WIKI_REL_RE = re.compile(r"^wiki/[a-z0-9][a-z0-9_/-]*\.md$")
+
+
+def _safe_wiki_path(rel: str) -> Path:
+    """Validate an untrusted repo-relative wiki path (e.g. from Notion) and return its local path."""
+    if not _SAFE_WIKI_REL_RE.fullmatch(rel) or ".." in rel.split("/") or "//" in rel:
+        raise NotionSyncError(f"Rejected unsafe wiki path: {rel!r}")
+    wiki_root = (_REPO_ROOT / "wiki").resolve()
+    local_path = (_REPO_ROOT / rel).resolve()
+    if not local_path.is_relative_to(wiki_root):
+        raise NotionSyncError(f"Rejected wiki path outside wiki/: {rel!r}")
+    return local_path
+
+
 def _iter_wiki_files() -> list[Path]:
     if not _WIKI_DIR.exists():
         return []
@@ -395,6 +409,10 @@ class NotionSync:
             path = _WIKI_DIR / rel_path.removeprefix("wiki/")
         if not path.exists():
             raise NotionSyncError(f"File not found: {rel_path}")
+        resolved = path.resolve()
+        wiki_roots = ((_REPO_ROOT / "wiki").resolve(), _WIKI_DIR.resolve())
+        if resolved.suffix != ".md" or not any(resolved.is_relative_to(r) for r in wiki_roots):
+            raise NotionSyncError(f"Rejected path outside wiki/: {rel_path}")
 
         meta = self._file_meta(path)
         rel = meta["rel"]
@@ -501,9 +519,9 @@ class NotionSync:
             page_id = page["id"]
             props = page.get("properties", {})
             try:
+                local_path = _safe_wiki_path(rel)
                 body = await self.client.get_markdown(page_id)
                 notion_hash = _content_hash(body)
-                local_path = _REPO_ROOT / rel
                 existing = local_path.read_text(encoding="utf-8") if local_path.exists() else None
                 title = self.client._prop_text(props, "Name") or Path(rel).stem
                 tags = self.client._prop_tags(props)
